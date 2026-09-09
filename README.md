@@ -1,0 +1,73 @@
+# OSS Contribution Finder
+
+Find open-source contribution opportunities via the GitHub API.
+
+Searches for issues labeled "good first issue" (or any label you choose), filtered by language, topic, star count, and activity. Outputs a ranked list ready for contribution.
+
+## Install
+
+```bash
+pip install git+https://github.com/yunaremaia/oss-contribution-finder.git
+```
+
+## Usage
+
+```bash
+# Find Python good-first-issues
+oss-contribution-finder --language python --limit 10
+
+# Find Rust CLI projects with 100+ stars
+oss-contribution-finder --language rust --topic cli --min-stars 100
+
+# Export as markdown
+oss-contribution-finder --language go --format markdown >> opportunities.md
+
+# JSON output for automation
+oss-contribution-finder --language typescript --format json --limit 50
+
+# Check rate limit status
+oss-contribution-finder --check-rate-limit
+```
+
+## Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--label` | Labels to filter (repeatable) | `good first issue` |
+| `--language`, `-l` | Programming language | — |
+| `--topic`, `-t` | GitHub topic | — |
+| `--min-stars` | Minimum star count | — |
+| `--created-after` | Issues created after (YYYY-MM-DD) | — |
+| `--updated-after` | Issues updated after (YYYY-MM-DD) | 30 days ago |
+| `--sort` | Sort field (`comments`, `reactions`, `updated`) | `updated` |
+| `--limit`, `-n` | Max results | 20 |
+| `--format`, `-f` | Output (`table`, `markdown`, `json`) | `table` |
+| `--no-enrich` | Skip repo metadata (faster) | false |
+| `--check-rate-limit` | Show rate limit and exit | — |
+
+## Authentication
+
+Set `GH_TOKEN` or `GITHUB_TOKEN` in your environment to avoid rate limits:
+
+```bash
+export GH_TOKEN=ghp_your_token_here
+```
+
+Without a token, searches are limited to 10 requests per minute.
+
+## Examples
+
+```bash
+# Find documentation contributions
+oss-contribution-finder --label "good first issue" --label "documentation" --limit 15
+
+# Find recently updated Python issues in AI/ML
+oss-contribution-finder --language python --topic machine-learning --updated-after 2026-08-01
+
+# Generate a weekly digest
+oss-contribution-finder --language rust --format markdown --limit 25 > weekly-opportunities.md
+```
+
+## License
+
+MIT

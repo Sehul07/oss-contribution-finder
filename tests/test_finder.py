@@ -1,0 +1,178 @@
+"""Tests for oss-contribution-finder."""
+import json
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from oss_contribution_finder import (
+    search_issues,
+    format_table,
+    format_markdown,
+    format_json,
+    dedupe_by_repo,
+    get_token,
+    rate_limit,
+)
+
+
+def test_get_token_from_env():
+    with patch.dict(os.environ, {"GH_TOKEN": "test_token_123"}):
+        assert get_token() == "test_token_123"
+
+
+def test_get_token_from_github_env():
+    with patch.dict(os.environ, {"GITHUB_TOKEN": "test_token_456"}):
+        assert get_token() == "test_token_456"
+
+
+def test_get_token_missing():
+    with patch.dict(os.environ, {}, clear=True):
+        assert get_token() is None
+
+
+def test_format_table_empty():
+    result = format_table([])
+    assert "No opportunities found" in result
+
+
+def test_format_table_with_data():
+    opportunities = [
+        {
+            "repo": {"full_name": "test/repo", "stargazers_count": 42},
+            "title": "Fix bug in parser",
+            "html_url": "https://github.com/test/repo/issues/1",
+        }
+    ]
+    result = format_table(opportunities)
+    assert "test/repo" in result
+    assert "Fix bug in parser" in result
+    assert "42" in result
+
+
+def test_format_markdown_empty():
+    result = format_markdown([])
+    assert "No opportunities found" in result
+
+
+def test_format_markdown_with_data():
+    opportunities = [
+        {
+            "repo": {
+                "full_name": "test/repo",
+                "html_url": "https://github.com/test/repo",
+                "description": "A test repo",
+                "stargazers_count": 100,
+                "language": "Python",
+            },
+            "title": "Fix bug",
+            "html_url": "https://github.com/test/repo/issues/1",
+            "labels": ["good first issue", "bug"],
+            "updated_at": "2026-09-01T12:00:00Z",
+        }
+    ]
+    result = format_markdown(opportunities)
+    assert "test/repo" in result
+    assert "Fix bug" in result
+    assert "good first issue" in result
+    assert "Python" in result
+
+
+def test_format_json_empty():
+    result = format_json([])
+    assert result == "[]"
+
+
+def test_format_json_with_data():
+    opportunities = [{"title": "Test", "repo": {"full_name": "test/repo"}}]
+    result = format_json(opportunities)
+    parsed = json.loads(result)
+    assert len(parsed) == 1
+    assert parsed[0]["title"] == "Test"
+
+
+def test_dedupe_by_repo_no_dedup():
+    opportunities = [
+        {"repo": {"full_name": "repo/a"}},
+        {"repo": {"full_name": "repo/b"}},
+    ]
+    result = dedupe_by_repo(opportunities, max_per_repo=3)
+    assert len(result) == 2
+
+
+def test_dedupe_by_repo_limits_per_repo():
+    opportunities = [
+        {"repo": {"full_name": "repo/a"}},
+        {"repo": {"full_name": "repo/a"}},
+        {"repo": {"full_name": "repo/a"}},
+        {"repo": {"full_name": "repo/a"}},
+    ]
+    result = dedupe_by_repo(opportunities, max_per_repo=2)
+    assert len(result) == 2
+
+
+def test_dedupe_by_repo_mixed():
+    opportunities = [
+        {"repo": {"full_name": "repo/a"}},
+        {"repo": {"full_name": "repo/a"}},
+        {"repo": {"full_name": "repo/b"}},
+        {"repo": {"full_name": "repo/a"}},
+    ]
+    result = dedupe_by_repo(opportunities, max_per_repo=2)
+    assert len(result) == 3  # 2 from repo/a + 1 from repo/b
+
+
+@patch("oss_contribution_finder.api_request")
+def test_search_issues_basic(mock_api):
+    mock_api.return_value = {
+        "total_count": 1,
+        "items": [
+            {
+                "title": "Fix bug",
+                "html_url": "https://github.com/test/repo/issues/1",
+                "repository_url": "https://api.github.com/repos/test/repo",
+                "labels": [{"name": "good first issue"}],
+                "updated_at": "2026-09-01T12:00:00Z",
+            }
+        ],
+    }
+    result = search_issues(labels=["good first issue"], language="python")
+    assert result["total_count"] == 1
+    assert len(result["items"]) == 1
+    assert result["items"][0]["title"] == "Fix bug"
+
+
+@patch("oss_contribution_finder.api_request")
+def test_search_issues_with_filters(mock_api):
+    mock_api.return_value = {"total_count": 0, "items": []}
+    search_issues(
+        labels=["good first issue", "help wanted"],
+        language="rust",
+        topic="cli",
+        min_stars=100,
+        created_after="2026-01-01",
+        updated_after="2026-08-01",
+    )
+    # Verify the API was called with correct parameters
+    call_args = mock_api.call_args
+    url = call_args[0][0]
+    assert "label%3A%22good%20first%20issue%22" in url
+    assert "label%3A%22help%20wanted%22" in url
+    assert "language%3Arust" in url
+    assert "topic%3Acli" in url
+    assert "stars%3A%3E%3D100" in url
+
+
+@patch("oss_contribution_finder.api_request")
+def test_rate_limit(mock_api):
+    mock_api.return_value = {
+        "resources": {
+            "core": {"limit": 5000, "remaining": 4999},
+            "search": {"limit": 30, "remaining": 29},
+        }
+    }
+    result = rate_limit()
+    assert result["resources"]["core"]["limit"] == 5000
