@@ -201,6 +201,7 @@ Examples:
   oss-contribution-finder --language go --format markdown >> opportunities.md
         """,
     )
+    parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
     parser.add_argument(
         "--label",
         action="append",
