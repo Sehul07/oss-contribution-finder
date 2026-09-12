@@ -105,6 +105,23 @@ def rate_limit(token: str | None = None) -> dict:
     return api_request(url, token=token)
 
 
+def _repo_info(opp: dict) -> dict:
+    """Return repo metadata, falling back to repository_url when enrich was skipped."""
+    repo = opp.get("repo")
+    if isinstance(repo, dict) and repo.get("full_name"):
+        return repo
+    repo_url = opp.get("repository_url", "")
+    parts = repo_url.rstrip("/").split("/")[-2:]
+    full_name = "/".join(parts) if len(parts) == 2 else "unknown/unknown"
+    return {
+        "full_name": full_name,
+        "html_url": f"https://github.com/{full_name}",
+        "stargazers_count": 0,
+        "language": "Unknown",
+        "description": None,
+    }
+
+
 def format_markdown(opportunities: list[dict]) -> str:
     """Format opportunities as markdown."""
     if not opportunities:
@@ -114,7 +131,7 @@ def format_markdown(opportunities: list[dict]) -> str:
     lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n")
 
     for i, opp in enumerate(opportunities, 1):
-        repo = opp["repo"]
+        repo = _repo_info(opp)
         lines.append(f"## {i}. [{repo['full_name']}]({repo['html_url']})")
         if repo.get("description"):
             lines.append(f"_{repo['description']}_")
@@ -146,10 +163,11 @@ def format_table(opportunities: list[dict]) -> str:
     lines.append("-" * 105)
 
     for i, opp in enumerate(opportunities, 1):
-        repo = opp["repo"]["full_name"]
-        stars = opp["repo"].get("stargazers_count", 0)
+        repo = _repo_info(opp)
+        repo_name = repo["full_name"]
+        stars = repo.get("stargazers_count", 0)
         title = opp["title"][:47] + "..." if len(opp["title"]) > 50 else opp["title"]
-        lines.append(f"{i:>3} {repo:<40} {stars:>6} {title:<50}")
+        lines.append(f"{i:>3} {repo_name:<40} {stars:>6} {title:<50}")
 
     return "\n".join(lines)
 
@@ -159,7 +177,7 @@ def dedupe_by_repo(opportunities: list[dict], max_per_repo: int = 3) -> list[dic
     counts: dict[str, int] = {}
     result = []
     for opp in opportunities:
-        repo = opp["repo"]["full_name"]
+        repo = _repo_info(opp)["full_name"]
         count = counts.get(repo, 0)
         if count < max_per_repo:
             result.append(opp)
