@@ -23,6 +23,9 @@ import urllib.parse
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from typing import Any
+import sqlite3
+from datetime import datetime
+from pathlib import Path
 
 # Simple in-memory response cache to reduce duplicate API calls
 _API_CACHE: dict[str, Any] = {}
@@ -233,7 +236,51 @@ def dedupe_by_repo(opportunities: list[dict], max_per_repo: int = 3) -> list[dic
             counts[repo] = count + 1
     return result
 
+class OpportunityTracker:
+    def __init__(self, db_path: Path = Path(".oss-contribution-finder.db")):
+        self.db_path = db_path
+        self._init_db()
 
+    def _init_db(self):
+        """Initializes the SQLite database table if it doesn't already exist."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS seen_issues (
+                    issue_url TEXT PRIMARY KEY,
+                    action TEXT,
+                    timestamp TEXT
+                )
+            """)
+            conn.commit()
+
+    def is_seen(self, issue_url: str) -> bool:
+        """Checks if the given issue URL has already been recorded."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM seen_issues WHERE issue_url = ?", (issue_url,))
+            return cursor.fetchone() is not None
+
+    def mark_seen(self, issue_url: str, action: str = "seen"):
+        """Inserts or updates an issue action."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO seen_issues (issue_url, action, timestamp)
+                VALUES (?, ?, ?)
+                ON CONFLICT(issue_url) DO UPDATE SET
+                    action = excluded.action,
+                    timestamp = excluded.timestamp
+            """, (issue_url, action, datetime.utcnow().isoformat()))
+            conn.commit()
+
+    def get_history(self):
+        """Fetches all tracked records."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT issue_url, action, timestamp FROM seen_issues ORDER BY timestamp DESC")
+            return cursor.fetchall()
+        
 def enrich_opportunities(
     opportunities: list[dict],
     token: str | None = None,
@@ -328,8 +375,37 @@ Examples:
         action="store_true",
         help="Disable response caching for API requests",
     )
+    parser.add_argument(
+        "--seen",
+        action="store_true",
+        help="Include previously seen issues in the output",
+    )
+    parser.add_argument(
+        "--mark-seen",
+        action="store_true",
+        help="Mark returned issues as seen in the tracking database",
+    )
+    parser.add_argument(
+        "--history",
+        action="store_true",
+        help="Display the history of tracked opportunities and exit",
+    )
 
     args = parser.parse_args()
+
+    tracker = OpportunityTracker()
+
+    if args.history:
+        history = tracker.get_history()
+        if not history:
+            print("No action history found.")
+        else:
+            print(f"{'TIMESTAMP':<25} {'ACTION':<10} ISSUE URL")
+            print("-" * 75)
+            for url, action, timestamp in history:
+                print(f"{timestamp:<25} {action:<10} {url}")
+        return 0
+    
     token = get_token()
 
     if args.check_rate_limit:
@@ -366,9 +442,20 @@ Examples:
 
     items = result.get("items", [])
 
+    # Deduplicate: filter out seen issues unless --seen is specified
+    if not args.seen:
+        items = [item for item in items if not tracker.is_seen(item.get("html_url", ""))]
+
     # Enrich with repo metadata
     if not args.no_enrich and token:
         items = enrich_opportunities(items, token=token, max_repos=args.limit)
+
+    # If --mark-seen is requested, record returned issues in the database
+    if args.mark_seen:
+        for item in items:
+            url = item.get("html_url")
+            if url:
+                tracker.mark_seen(url, action="seen")
 
     # Format output
     formatters = {
